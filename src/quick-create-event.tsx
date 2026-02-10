@@ -418,10 +418,12 @@ function Command() {
       <Form.TagPicker
         id="guests"
         title="Guests"
-        placeholder="Search contacts..."
+        placeholder="Type to search contacts..."
         value={selectedGuests}
         onChange={setSelectedGuests}
         onSearchTextChange={setGuestSearch}
+        isLoading={isLoadingContacts}
+        filtering={false}
       >
         {contactOptions.map((contact) => (
           <Form.TagPicker.Item
