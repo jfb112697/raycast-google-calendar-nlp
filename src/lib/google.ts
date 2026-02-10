@@ -78,22 +78,8 @@ export async function listContacts() {
     // Ignore errors for personal contacts
   }
 
-  // Get organization directory contacts (Google Workspace only)
-  // Note: We only load first 500 for initial list - users should search for specific people
-  try {
-    const directoryResponse = await peopleClient.people.listDirectoryPeople({
-      pageSize: 500,
-      readMask: "names,emailAddresses,photos",
-      sources: ["DIRECTORY_SOURCE_TYPE_DOMAIN_PROFILE"],
-    });
-
-    const directoryContacts = directoryResponse.data.people?.filter(
-      (contact) => contact.emailAddresses?.[0]?.value
-    ) ?? [];
-    results.push(...directoryContacts);
-  } catch (e) {
-    // Directory access may not be available (personal accounts, or Workspace without directory enabled)
-  }
+  // Skip directory listing for initial load - users should search for org contacts
+  // This keeps the initial load fast and avoids loading hundreds of contacts
 
   return results;
 }
@@ -141,15 +127,17 @@ export async function searchContacts(query?: string) {
   try {
     const directoryResponse = await peopleClient.people.searchDirectoryPeople({
       query: query,
-      pageSize: 30,
+      pageSize: 50,
       readMask: "names,emailAddresses,photos",
-      sources: ["DIRECTORY_SOURCE_TYPE_DOMAIN_PROFILE"],
+      sources: ["DIRECTORY_SOURCE_TYPE_DOMAIN_PROFILE", "DIRECTORY_SOURCE_TYPE_DOMAIN_CONTACT"],
     });
+    console.log("[Directory Search]", query, "->", directoryResponse.data.people?.length ?? 0, "results");
     const directoryContacts = directoryResponse.data.people?.filter(
       (contact) => contact.emailAddresses?.[0]?.value
     ) ?? [];
     results.push(...directoryContacts);
   } catch (e) {
+    console.error("[Directory Search Error]", e);
     // Directory access may not be available
   }
 
