@@ -79,9 +79,10 @@ export async function listContacts() {
   }
 
   // Get organization directory contacts (Google Workspace only)
+  // Note: We only load first 500 for initial list - users should search for specific people
   try {
     const directoryResponse = await peopleClient.people.listDirectoryPeople({
-      pageSize: 100,
+      pageSize: 500,
       readMask: "names,emailAddresses,photos",
       sources: ["DIRECTORY_SOURCE_TYPE_DOMAIN_PROFILE"],
     });
@@ -140,6 +141,7 @@ export async function searchContacts(query?: string) {
   try {
     const directoryResponse = await peopleClient.people.searchDirectoryPeople({
       query: query,
+      pageSize: 30,
       readMask: "names,emailAddresses,photos",
       sources: ["DIRECTORY_SOURCE_TYPE_DOMAIN_PROFILE"],
     });
