@@ -202,9 +202,43 @@ function Command() {
   const { data: initialContacts, isLoading: isLoadingInitialContacts } = useContactsList();
   const { data: searchedContacts, isLoading: isLoadingSearch } = useContactsSearch(guestSearch);
   
-  // Use searched contacts if there's a query, otherwise show initial contacts
-  const contactsData = guestSearch.trim() ? searchedContacts : initialContacts;
-  const isLoadingContacts = guestSearch.trim() ? isLoadingSearch : isLoadingInitialContacts;
+  // Combine and deduplicate contacts: search results take priority, then initial contacts
+  const contactsData = useMemo(() => {
+    const seen = new Set<string>();
+    const results: people_v1.Schema$Person[] = [];
+    
+    // Add search results first (if searching)
+    if (guestSearch.trim() && searchedContacts) {
+      for (const contact of searchedContacts) {
+        const email = contact.emailAddresses?.[0]?.value;
+        if (email && !seen.has(email.toLowerCase())) {
+          seen.add(email.toLowerCase());
+          results.push(contact);
+        }
+      }
+    }
+    
+    // Add initial contacts (filtered by search query if present)
+    if (initialContacts) {
+      const query = guestSearch.trim().toLowerCase();
+      for (const contact of initialContacts) {
+        const email = contact.emailAddresses?.[0]?.value;
+        const name = contact.names?.[0]?.displayName?.toLowerCase() ?? "";
+        
+        if (email && !seen.has(email.toLowerCase())) {
+          // If there's a search query, filter by it
+          if (!query || name.includes(query) || email.toLowerCase().includes(query)) {
+            seen.add(email.toLowerCase());
+            results.push(contact);
+          }
+        }
+      }
+    }
+    
+    return results;
+  }, [guestSearch, searchedContacts, initialContacts]);
+  
+  const isLoadingContacts = isLoadingInitialContacts || (guestSearch.trim() ? isLoadingSearch : false);
   
   const availableCalendars = useMemo(() => {
     const available = [...calendarsData.selected, ...calendarsData.unselected].filter(
