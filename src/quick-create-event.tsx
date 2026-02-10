@@ -12,7 +12,7 @@ import {
   showToast,
 } from "@raycast/api";
 import { getAvatarIcon, showFailureToast, useForm } from "@raycast/utils";
-import { useGoogleAPIs, withGoogleAPIs, useContacts } from "./lib/google";
+import { useGoogleAPIs, withGoogleAPIs, useContactsList, useContactsSearch } from "./lib/google";
 import useCalendars from "./hooks/useCalendars";
 import { addSignature } from "./lib/utils";
 import { calendar_v3 } from "@googleapis/calendar";
@@ -197,7 +197,14 @@ function Command() {
   const [selectedGuests, setSelectedGuests] = useState<string[]>([]);
 
   const { data: calendarsData, isLoading: isLoadingCalendars } = useCalendars();
-  const { data: contactsData, isLoading: isLoadingContacts } = useContacts(guestSearch);
+  
+  // Load initial contacts list, then search when user types
+  const { data: initialContacts, isLoading: isLoadingInitialContacts } = useContactsList();
+  const { data: searchedContacts, isLoading: isLoadingSearch } = useContactsSearch(guestSearch);
+  
+  // Use searched contacts if there's a query, otherwise show initial contacts
+  const contactsData = guestSearch.trim() ? searchedContacts : initialContacts;
+  const isLoadingContacts = guestSearch.trim() ? isLoadingSearch : isLoadingInitialContacts;
   
   const availableCalendars = useMemo(() => {
     const available = [...calendarsData.selected, ...calendarsData.unselected].filter(

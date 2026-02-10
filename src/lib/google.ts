@@ -56,11 +56,34 @@ export function useGoogleAPIs() {
   };
 }
 
+export async function listContacts() {
+  const peopleClient = getPeopleClient();
+
+  // Get user's connections (saved contacts)
+  const connectionsResponse = await peopleClient.people.connections.list({
+    resourceName: "people/me",
+    pageSize: 100,
+    personFields: "names,emailAddresses,photos",
+    sortOrder: "LAST_MODIFIED_DESCENDING",
+  });
+
+  const contacts = connectionsResponse.data.connections?.filter(
+    (contact) => contact.emailAddresses?.[0]?.value
+  ) ?? [];
+
+  return contacts;
+}
+
 export async function searchContacts(query?: string) {
   const peopleClient = getPeopleClient();
 
+  // If no query, return empty (use listContacts for initial load)
+  if (!query || query.trim().length === 0) {
+    return [];
+  }
+
   const contactsResponse = await peopleClient.people.searchContacts({
-    query: query ?? "",
+    query: query,
     readMask: "names,emailAddresses,photos",
     sources: ["READ_SOURCE_TYPE_CONTACT", "READ_SOURCE_TYPE_PROFILE"],
   });
@@ -70,7 +93,7 @@ export async function searchContacts(query?: string) {
 
   const otherContactsResponse = await peopleClient.otherContacts.search({
     readMask: "names,emailAddresses,photos",
-    query: query ?? "",
+    query: query,
   });
   const otherContacts = otherContactsResponse.data.results
     ?.map((contact) => contact.person)
@@ -88,6 +111,20 @@ export async function getAutoAddHangouts() {
   return await cachedFunction();
 }
 
+export function useContactsList() {
+  return useCachedPromise(listContacts, [], {
+    keepPreviousData: true,
+  });
+}
+
+export function useContactsSearch(query?: string) {
+  return useCachedPromise(searchContacts, [query], {
+    keepPreviousData: true,
+    execute: !!query && query.trim().length > 0,
+  });
+}
+
+// Legacy hook for backwards compatibility
 export function useContacts(query?: string) {
   return useCachedPromise(searchContacts, [query], {
     keepPreviousData: true,
