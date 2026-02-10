@@ -5,11 +5,13 @@ import {
   Icon,
   Image,
   LaunchType,
+  List,
   Toast,
   getPreferenceValues,
   launchCommand,
   open,
   showToast,
+  useNavigation,
 } from "@raycast/api";
 import { getAvatarIcon, showFailureToast, useForm } from "@raycast/utils";
 import { useGoogleAPIs, withGoogleAPIs, useContacts } from "./lib/google";
@@ -23,7 +25,7 @@ import { people_v1 } from "@googleapis/people";
 type FormValues = {
   input: string;
   calendar: string;
-  guests: string[];
+  guests: string;
 };
 
 const preferences: Preferences.QuickCreateEvent = getPreferenceValues();
@@ -42,15 +44,10 @@ interface ParsedEvent extends SherlockResult {
 // Parse duration patterns like "for 1 hour", "for 30 minutes", "for 2h", etc.
 function parseDurationFromText(input: string): { durationMinutes: number | null; cleanedInput: string } {
   const durationPatterns = [
-    // "for X hour(s)" or "for X hr(s)"
     /\bfor\s+(\d+(?:\.\d+)?)\s*(?:hours?|hrs?)\b/i,
-    // "for X minute(s)" or "for X min(s)"
     /\bfor\s+(\d+)\s*(?:minutes?|mins?)\b/i,
-    // "for Xh" or "for Xh Ym" or "for X:YY"
     /\bfor\s+(\d+)(?::(\d+)|h(?:\s*(\d+)m?)?)\b/i,
-    // "X hour meeting" or "X hr meeting"
     /\b(\d+(?:\.\d+)?)\s*(?:hours?|hrs?)\s+(?:meeting|call|session|event)\b/i,
-    // "X minute meeting"
     /\b(\d+)\s*(?:minutes?|mins?)\s+(?:meeting|call|session|event)\b/i,
   ];
 
@@ -60,25 +57,20 @@ function parseDurationFromText(input: string): { durationMinutes: number | null;
       let minutes = 0;
       
       if (pattern.source.includes("hour") || pattern.source.includes("hr")) {
-        // Hours pattern
         const hours = parseFloat(match[1]);
         minutes = Math.round(hours * 60);
         if (match[2]) {
-          // Additional minutes from "Xh Ym" format
           minutes += parseInt(match[2], 10);
         } else if (match[3]) {
           minutes += parseInt(match[3], 10);
         }
       } else if (pattern.source.includes("minute") || pattern.source.includes("min")) {
-        // Minutes pattern
         minutes = parseInt(match[1], 10);
       } else if (match[2]) {
-        // "X:YY" format
         minutes = parseInt(match[1], 10) * 60 + parseInt(match[2], 10);
       }
 
       if (minutes > 0) {
-        // Remove the duration phrase from input so Sherlock doesn't get confused
         const cleanedInput = input.replace(match[0], "").replace(/\s+/g, " ").trim();
         return { durationMinutes: minutes, cleanedInput };
       }
@@ -89,10 +81,7 @@ function parseDurationFromText(input: string): { durationMinutes: number | null;
 }
 
 function parseNaturalLanguage(input: string): ParsedEvent {
-  // First, extract any explicit duration
   const { durationMinutes, cleanedInput } = parseDurationFromText(input);
-  
-  // Then parse with Sherlock
   const sherlockResult = Sherlock.parse(cleanedInput) as SherlockResult;
   
   return {
@@ -101,9 +90,9 @@ function parseNaturalLanguage(input: string): ParsedEvent {
   };
 }
 
-function formatPreview(parsed: ParsedEvent, selectedGuests: string[]): string {
+function formatPreview(parsed: ParsedEvent, guests: string): string {
   if (!parsed.startDate) {
-    return "Type something like: 'Meeting with John tomorrow at 3pm for 1 hour' or 'Lunch on Friday from 12-1pm'";
+    return "Type something like: 'Meeting with John tomorrow at 3pm for 1 hour'";
   }
 
   const lines: string[] = [];
@@ -123,7 +112,6 @@ function formatPreview(parsed: ParsedEvent, selectedGuests: string[]): string {
   if (parsed.isAllDay) {
     lines.push(`📅 ${startStr} (All day)`);
   } else {
-    // Calculate end time
     let endDate: Date;
     let durationNote = "";
     
@@ -145,8 +133,9 @@ function formatPreview(parsed: ParsedEvent, selectedGuests: string[]): string {
     lines.push(`📅 ${startStr} → ${endStr}${durationNote}`);
   }
 
-  if (selectedGuests.length > 0) {
-    lines.push(`👥 ${selectedGuests.length} guest${selectedGuests.length > 1 ? "s" : ""}`);
+  const guestList = guests.split(",").map(g => g.trim()).filter(Boolean);
+  if (guestList.length > 0) {
+    lines.push(`👥 ${guestList.length} guest${guestList.length > 1 ? "s" : ""}`);
   }
 
   return lines.join("\n");
@@ -164,28 +153,68 @@ function formatDuration(minutes: number): string {
   return `${hours}h ${mins}m`;
 }
 
-function getContactIcon(contact: people_v1.Schema$Person): Image.ImageLike {
-  const profileUrl = contact.photos?.find((photo) => photo.metadata?.source?.type === "PROFILE")?.url;
-  if (profileUrl) {
-    return {
-      source: profileUrl,
-      fallback: Icon.Person,
-      mask: Image.Mask.Circle,
-    };
+// Contact Picker component - opens as a pushed view
+function ContactPicker({ onSelect }: { onSelect: (email: string) => void }) {
+  const [searchText, setSearchText] = useState("");
+  const { data, isLoading } = useContacts(searchText);
+  const { pop } = useNavigation();
+
+  function getIcon(contact: people_v1.Schema$Person): Image.ImageLike {
+    const profileUrl = contact.photos?.find((photo) => photo.metadata?.source?.type === "PROFILE")?.url;
+    if (profileUrl) {
+      return {
+        source: profileUrl,
+        fallback: Icon.Person,
+        mask: Image.Mask.Circle,
+      };
+    }
+    const name = contact.names?.[0]?.displayName ?? contact.emailAddresses?.[0]?.value;
+    if (name) {
+      return getAvatarIcon(name);
+    }
+    return Icon.Person;
   }
 
-  const name = contact.names?.[0]?.displayName ?? contact.emailAddresses?.[0]?.value;
-  if (name) {
-    return getAvatarIcon(name);
-  }
-
-  return Icon.Person;
+  return (
+    <List
+      isLoading={isLoading}
+      searchText={searchText}
+      searchBarPlaceholder="Search contacts..."
+      onSearchTextChange={setSearchText}
+    >
+      {data?.map((contact) => {
+        const email = contact.emailAddresses?.[0]?.value;
+        if (!email) return null;
+        return (
+          <List.Item
+            key={contact.resourceName ?? email}
+            icon={getIcon(contact)}
+            title={email}
+            subtitle={contact.names?.[0]?.displayName}
+            actions={
+              <ActionPanel>
+                <Action
+                  title="Add Guest"
+                  icon={Icon.AddPerson}
+                  onAction={() => {
+                    onSelect(email);
+                    pop();
+                  }}
+                />
+              </ActionPanel>
+            }
+          />
+        );
+      })}
+    </List>
+  );
 }
 
 function Command() {
   const { calendar } = useGoogleAPIs();
   const [calendarId, setCalendarId] = useState("primary");
   const [inputValue, setInputValue] = useState("");
+  const [guestsValue, setGuestsValue] = useState("");
   const [parsed, setParsed] = useState<ParsedEvent>({ 
     eventTitle: null, 
     startDate: null, 
@@ -193,13 +222,8 @@ function Command() {
     isAllDay: false,
     durationMinutes: null 
   });
-  const [guestSearch, setGuestSearch] = useState("");
-  const [selectedGuests, setSelectedGuests] = useState<string[]>([]);
 
   const { data: calendarsData, isLoading: isLoadingCalendars } = useCalendars();
-  
-  // Use same approach as Search Contacts command
-  const { data: contactsData, isLoading: isLoadingContacts } = useContacts(guestSearch);
   
   const availableCalendars = useMemo(() => {
     const available = [...calendarsData.selected, ...calendarsData.unselected].filter(
@@ -215,18 +239,6 @@ function Command() {
     }));
   }, [calendarsData]);
 
-  // Build contact options from search results
-  const contactOptions = useMemo(() => {
-    if (!contactsData) return [];
-    return contactsData
-      .filter((contact) => contact.emailAddresses?.[0]?.value)
-      .map((contact) => ({
-        email: contact.emailAddresses![0]!.value!,
-        name: contact.names?.[0]?.displayName,
-        icon: getContactIcon(contact),
-      }));
-  }, [contactsData]);
-
   const handleInputChange = useCallback((value: string) => {
     setInputValue(value);
     if (value.trim()) {
@@ -237,11 +249,19 @@ function Command() {
     }
   }, []);
 
+  const addGuest = useCallback((email: string) => {
+    setGuestsValue((prev) => {
+      const existing = prev.split(",").map(e => e.trim()).filter(Boolean);
+      if (existing.includes(email)) return prev;
+      return existing.length > 0 ? `${prev}, ${email}` : email;
+    });
+  }, []);
+
   const { handleSubmit, itemProps } = useForm<FormValues>({
     initialValues: {
       input: "",
       calendar: "primary",
-      guests: [],
+      guests: "",
     },
     validation: {
       input: (value) => {
@@ -268,7 +288,6 @@ function Command() {
       const calendarIdToUse = values.calendar ?? "primary";
       const startDate = result.startDate;
       
-      // Calculate end date with priority: Sherlock endDate > explicit duration > default
       let endDate: Date;
       if (result.endDate) {
         endDate = result.endDate;
@@ -279,32 +298,22 @@ function Command() {
         endDate = new Date(startDate.getTime() + defaultDuration * 60 * 1000);
       }
 
+      const guestEmails = guestsValue.split(",").map(e => e.trim()).filter(Boolean);
+
       const requestBody: calendar_v3.Schema$Event = result.isAllDay
         ? {
             summary: result.eventTitle,
             description: addSignature(undefined),
-            start: {
-              date: startDate.toISOString().split("T")[0],
-            },
-            end: {
-              date: endDate.toISOString().split("T")[0],
-            },
-            attendees: selectedGuests.length > 0 
-              ? selectedGuests.map((email) => ({ email })) 
-              : undefined,
+            start: { date: startDate.toISOString().split("T")[0] },
+            end: { date: endDate.toISOString().split("T")[0] },
+            attendees: guestEmails.length > 0 ? guestEmails.map((email) => ({ email })) : undefined,
           }
         : {
             summary: result.eventTitle,
             description: addSignature(undefined),
-            start: {
-              dateTime: startDate.toISOString(),
-            },
-            end: {
-              dateTime: endDate.toISOString(),
-            },
-            attendees: selectedGuests.length > 0 
-              ? selectedGuests.map((email) => ({ email })) 
-              : undefined,
+            start: { dateTime: startDate.toISOString() },
+            end: { dateTime: endDate.toISOString() },
+            attendees: guestEmails.length > 0 ? guestEmails.map((email) => ({ email })) : undefined,
           };
 
       try {
@@ -315,8 +324,8 @@ function Command() {
         });
 
         setInputValue("");
+        setGuestsValue("");
         setParsed({ eventTitle: null, startDate: null, endDate: null, isAllDay: false, durationMinutes: null });
-        setSelectedGuests([]);
 
         await showToast({
           title: `Created: ${result.eventTitle}`,
@@ -369,14 +378,29 @@ function Command() {
     },
   };
 
+  const guestsProps = {
+    ...itemProps.guests,
+    value: guestsValue,
+    onChange: (value: string) => {
+      setGuestsValue(value);
+      itemProps.guests.onChange?.(value);
+    },
+  };
+
   const canOpenFullForm = parsed.startDate && parsed.eventTitle;
 
   return (
     <Form
-      isLoading={isLoadingCalendars || isLoadingContacts}
+      isLoading={isLoadingCalendars}
       actions={
         <ActionPanel>
           <Action.SubmitForm icon={Icon.Calendar} title="Create Event" onSubmit={handleSubmit} />
+          <Action.Push
+            icon={Icon.AddPerson}
+            title="Add Guest from Contacts"
+            shortcut={{ modifiers: ["cmd"], key: "g" }}
+            target={<ContactPicker onSelect={addGuest} />}
+          />
           {canOpenFullForm && (
             <Action
               icon={Icon.Pencil}
@@ -395,7 +419,7 @@ function Command() {
                     startDate: parsed.startDate,
                     duration: durationMin ? `${durationMin}min` : undefined,
                     calendar: calendarId,
-                    attendees: selectedGuests.join(","),
+                    attendees: guestsValue,
                   },
                 });
               }}
@@ -411,29 +435,17 @@ function Command() {
         info="Type your event in natural language. Supports: 'tomorrow at 3pm', 'next Friday from 2-4pm', 'for 1 hour', etc."
         {...inputProps}
       />
-      <Form.Description title="Preview" text={formatPreview(parsed, selectedGuests)} />
+      <Form.Description title="Preview" text={formatPreview(parsed, guestsValue)} />
       
       <Form.Separator />
       
-      <Form.TagPicker
+      <Form.TextField
         id="guests"
         title="Guests"
-        placeholder="Type to search contacts..."
-        value={selectedGuests}
-        onChange={setSelectedGuests}
-        onSearchTextChange={setGuestSearch}
-        isLoading={isLoadingContacts}
-        filtering={false}
-      >
-        {contactOptions.map((contact) => (
-          <Form.TagPicker.Item
-            key={contact.email}
-            value={contact.email}
-            title={contact.name ? `${contact.name} (${contact.email})` : contact.email}
-            icon={contact.icon}
-          />
-        ))}
-      </Form.TagPicker>
+        placeholder="email@example.com, another@example.com"
+        info="Comma-separated emails. Press ⌘G to search contacts."
+        {...guestsProps}
+      />
       
       <Form.Dropdown title="Calendar" value={calendarId} {...calendarItemProps}>
         {availableCalendars.map((calendar) => (
