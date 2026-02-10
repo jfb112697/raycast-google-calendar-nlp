@@ -13,7 +13,7 @@ const google = OAuthService.google({
   authorizeUrl: "https://accounts.google.com/o/oauth2/v2/auth",
   tokenUrl: "https://oauth2.googleapis.com/token",
   scope:
-    "https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/contacts.readonly https://www.googleapis.com/auth/contacts.other.readonly https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile openid",
+    "https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/contacts.readonly https://www.googleapis.com/auth/contacts.other.readonly https://www.googleapis.com/auth/directory.readonly https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile openid",
   onAuthorize({ token }) {
     const oauth = new auth.OAuth2();
     oauth.setCredentials({ access_token: token });
@@ -59,19 +59,42 @@ export function useGoogleAPIs() {
 export async function listContacts() {
   const peopleClient = getPeopleClient();
 
+  const results: people_v1.Schema$Person[] = [];
+
   // Get user's connections (saved contacts)
-  const connectionsResponse = await peopleClient.people.connections.list({
-    resourceName: "people/me",
-    pageSize: 100,
-    personFields: "names,emailAddresses,photos",
-    sortOrder: "LAST_MODIFIED_DESCENDING",
-  });
+  try {
+    const connectionsResponse = await peopleClient.people.connections.list({
+      resourceName: "people/me",
+      pageSize: 100,
+      personFields: "names,emailAddresses,photos",
+      sortOrder: "LAST_MODIFIED_DESCENDING",
+    });
 
-  const contacts = connectionsResponse.data.connections?.filter(
-    (contact) => contact.emailAddresses?.[0]?.value
-  ) ?? [];
+    const contacts = connectionsResponse.data.connections?.filter(
+      (contact) => contact.emailAddresses?.[0]?.value
+    ) ?? [];
+    results.push(...contacts);
+  } catch (e) {
+    // Ignore errors for personal contacts
+  }
 
-  return contacts;
+  // Get organization directory contacts (Google Workspace only)
+  try {
+    const directoryResponse = await peopleClient.people.listDirectoryPeople({
+      pageSize: 100,
+      readMask: "names,emailAddresses,photos",
+      sources: ["DIRECTORY_SOURCE_TYPE_DOMAIN_PROFILE"],
+    });
+
+    const directoryContacts = directoryResponse.data.people?.filter(
+      (contact) => contact.emailAddresses?.[0]?.value
+    ) ?? [];
+    results.push(...directoryContacts);
+  } catch (e) {
+    // Directory access may not be available (personal accounts, or Workspace without directory enabled)
+  }
+
+  return results;
 }
 
 export async function searchContacts(query?: string) {
@@ -82,24 +105,53 @@ export async function searchContacts(query?: string) {
     return [];
   }
 
-  const contactsResponse = await peopleClient.people.searchContacts({
-    query: query,
-    readMask: "names,emailAddresses,photos",
-    sources: ["READ_SOURCE_TYPE_CONTACT", "READ_SOURCE_TYPE_PROFILE"],
-  });
-  const contacts = contactsResponse.data.results
-    ?.map((contact) => contact.person)
-    .filter(Boolean) as people_v1.Schema$Person[];
+  const results: people_v1.Schema$Person[] = [];
 
-  const otherContactsResponse = await peopleClient.otherContacts.search({
-    readMask: "names,emailAddresses,photos",
-    query: query,
-  });
-  const otherContacts = otherContactsResponse.data.results
-    ?.map((contact) => contact.person)
-    .filter(Boolean) as people_v1.Schema$Person[];
+  // Search personal contacts
+  try {
+    const contactsResponse = await peopleClient.people.searchContacts({
+      query: query,
+      readMask: "names,emailAddresses,photos",
+      sources: ["READ_SOURCE_TYPE_CONTACT", "READ_SOURCE_TYPE_PROFILE"],
+    });
+    const contacts = contactsResponse.data.results
+      ?.map((contact) => contact.person)
+      .filter(Boolean) as people_v1.Schema$Person[];
+    if (contacts) results.push(...contacts);
+  } catch (e) {
+    // Ignore errors
+  }
 
-  return [...(contacts ?? []), ...(otherContacts ?? [])];
+  // Search "other" contacts (people you've emailed)
+  try {
+    const otherContactsResponse = await peopleClient.otherContacts.search({
+      readMask: "names,emailAddresses,photos",
+      query: query,
+    });
+    const otherContacts = otherContactsResponse.data.results
+      ?.map((contact) => contact.person)
+      .filter(Boolean) as people_v1.Schema$Person[];
+    if (otherContacts) results.push(...otherContacts);
+  } catch (e) {
+    // Ignore errors
+  }
+
+  // Search organization directory (Google Workspace only)
+  try {
+    const directoryResponse = await peopleClient.people.searchDirectoryPeople({
+      query: query,
+      readMask: "names,emailAddresses,photos",
+      sources: ["DIRECTORY_SOURCE_TYPE_DOMAIN_PROFILE"],
+    });
+    const directoryContacts = directoryResponse.data.people?.filter(
+      (contact) => contact.emailAddresses?.[0]?.value
+    ) ?? [];
+    results.push(...directoryContacts);
+  } catch (e) {
+    // Directory access may not be available
+  }
+
+  return results;
 }
 
 export async function getAutoAddHangouts() {
